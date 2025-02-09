@@ -1,0 +1,5 @@
+pdfplumber
+python-pptx
+pillow
+tqdm
+customtkinter
