@@ -45,10 +45,11 @@ class MCQQuestionSplitter:
         self.template_path = TemplateManager.get_template_path()
 
     def detect_questions(self, pdf_path):
-        """Detect questions numbered 1-40 and their complete content including images."""
+        """Detect questions with consistent formatting and clear boundaries."""
         questions = []
         current_question = None
         expected_question = 1
+        reference_formatting = None
         
         with pdfplumber.open(pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages[1:], 1):  # Skip first page if needed
@@ -87,6 +88,21 @@ class MCQQuestionSplitter:
                     # Check for question patterns
                     num_match = re.match(r'^\s*(\d+)[.\s]', line_text)
                     
+                    # If first question, set reference formatting
+                    if not reference_formatting and num_match:
+                        reference_formatting = {
+                            'fontname': line[0].get('fontname'),
+                            'size': line[0].get('size'),
+                            'color': line[0].get('strokedColor')
+                        }
+                    
+                    # Validate formatting for subsequent questions
+                    formatting_match = (
+                        reference_formatting and 
+                        line[0].get('fontname') == reference_formatting['fontname'] and
+                        abs(line[0].get('size', 0) - reference_formatting['size']) <= 1
+                    )
+                    
                     question_starters = r'(Which|What|How|Why|Where|When|Whose|Who|In|The|If|Define|State|Calculate)'
                     starter_match = re.match(f"^{question_starters}", line_text, re.IGNORECASE)
                     
@@ -95,17 +111,17 @@ class MCQQuestionSplitter:
                     is_question = False
                     if num_match:
                         question_num = int(num_match.group(1))
-                        is_question = question_num == expected_question
+                        is_question = question_num == expected_question and formatting_match
                     elif starter_match and len(line_text.split()) > 3:
-                        if not current_question:
-                            is_question = True
+                        is_question = formatting_match and not current_question
                     
                     if is_question:
+                        # Finalize previous question
                         if current_question:
                             questions.append(current_question)
                         
                         bbox = [line[0]['x0'], line[0]['top'], 
-                               line[-1]['x1'], line[-1]['bottom']]
+                            line[-1]['x1'], line[-1]['bottom']]
                         
                         current_question = {
                             'number': expected_question,
@@ -119,33 +135,25 @@ class MCQQuestionSplitter:
                     
                     elif current_question and not option_match:
                         bbox = [line[0]['x0'], line[0]['top'], 
-                               line[-1]['x1'], line[-1]['bottom']]
+                            line[-1]['x1'], line[-1]['bottom']]
                         current_question['content'].append((page_num, bbox, line_text))
                         current_question['end_bbox'][2] = max(current_question['end_bbox'][2], bbox[2])
                         current_question['end_bbox'][3] = max(current_question['end_bbox'][3], bbox[3])
                     
                     elif option_match:
                         bbox = [line[0]['x0'], line[0]['top'], 
-                               line[-1]['x1'], line[-1]['bottom']]
+                            line[-1]['x1'], line[-1]['bottom']]
                         if current_question:
                             current_question['content'].append((page_num, bbox, line_text))
                             current_question['end_bbox'][2] = max(current_question['end_bbox'][2], bbox[2])
                             current_question['end_bbox'][3] = max(current_question['end_bbox'][3], bbox[3])
-                
-                # Handle images if present
-                if page.images:
-                    for img in page.images:
-                        if current_question and img['bbox'][1] >= current_question['start_bbox'][1]:
-                            current_question['content'].append((page_num, img['bbox'], "IMAGE"))
-                            current_question['end_bbox'][2] = max(current_question['end_bbox'][2], img['bbox'][2])
-                            current_question['end_bbox'][3] = max(current_question['end_bbox'][3], img['bbox'][3])
-        
-        # Add the last question
-        if current_question:
-            questions.append(current_question)
+            
+            # Add the last question
+            if current_question:
+                questions.append(current_question)
         
         return questions
-
+    
     def capture_question_image(self, pdf_path, question):
         """Capture entire question including images as a single image."""
         with pdfplumber.open(pdf_path) as pdf:
@@ -153,14 +161,18 @@ class MCQQuestionSplitter:
             
             # Calculate complete boundary
             bbox = question['start_bbox'].copy()
-            for content in question['content']:
-                page_num, content_bbox, _ = content
-                if page_num == question['page']:
-                    bbox[0] = min(bbox[0], content_bbox[0])
-                    bbox[1] = min(bbox[1], content_bbox[1]) + 0.2
-                    bbox[2] = max(bbox[2], content_bbox[2])
-                    bbox[3] = max(bbox[3], content_bbox[3]) - 30
             
+            for content in question['content']:
+                page_num, content_bbox, content_text = content
+                
+                # Check if content is on the same page and not a next question
+                if (page_num == question['page'] and 
+                    not re.match(r'^\s*(\d+)[.\s]', content_text)):
+                    bbox[0] = min(bbox[0], content_bbox[0])
+                    bbox[1] = min(bbox[1], content_bbox[1])
+                    bbox[2] = max(bbox[2], content_bbox[2])
+                    bbox[3] = max(bbox[3], content_bbox[3])
+                        
             # Add padding
             padding = 20
             crop_box = (
