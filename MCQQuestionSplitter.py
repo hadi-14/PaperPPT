@@ -133,7 +133,8 @@ class MCQQuestionSplitter:
                         expected_question += 1
                         print(f"Found question {expected_question-1}: {line_text}")
                     
-                    elif current_question and not option_match:
+                    elif current_question and not option_match and line_text != " ":
+                        # print(line_text)
                         bbox = [line[0]['x0'], line[0]['top'], 
                             line[-1]['x1'], line[-1]['bottom']]
                         current_question['content'].append((page_num, bbox, line_text))
@@ -147,6 +148,7 @@ class MCQQuestionSplitter:
                             current_question['content'].append((page_num, bbox, line_text))
                             current_question['end_bbox'][2] = max(current_question['end_bbox'][2], bbox[2])
                             current_question['end_bbox'][3] = max(current_question['end_bbox'][3], bbox[3])
+                            
             
             # Add the last question
             if current_question:
@@ -172,18 +174,13 @@ class MCQQuestionSplitter:
                     bbox[1] = min(bbox[1], content_bbox[1])
                     bbox[2] = max(bbox[2], content_bbox[2])
                     bbox[3] = max(bbox[3], content_bbox[3])
-                        
-            # Add padding
-            padding = 20
-            crop_box = (
-                max(0, bbox[0] - padding),
-                max(0, bbox[1] - padding),
-                min(page.width, bbox[2] + padding),
-                min(page.height, bbox[3] + padding)
-            )
-            
+                    
+            # bbox[2] = page.bbox[2]
+            bbox[2] = min(bbox[2] * 1.20, page.bbox[2])
+            bbox[3] = min(bbox[3] + 15, page.bbox[3])
+
             # Render page to image
-            img = page.crop(crop_box).to_image(resolution=200)
+            img = page.crop(bbox).to_image(resolution=200)
             
             # Save to temporary file
             img_path = os.path.join(self.temp_dir, f'question_{question["number"]}.png')
