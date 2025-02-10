@@ -1,3 +1,6 @@
 ./MCQs_to_PPT.exe
 ./MCQs_to_PPT.onefile-build
 ./__pycache__
+./MCQs_to_PPT.build
+MCQs_to_PPT.dist
+--include-data-dir=templates=templates
