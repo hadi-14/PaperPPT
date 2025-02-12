@@ -52,7 +52,7 @@ class MCQQuestionSplitter:
         reference_formatting = None
         
         with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages[1:], 1):  # Skip first page if needed
+            for page_num, page in enumerate(pdf.pages[1:], 1):  # Start from page 0
                 # Extract words with their properties
                 words = page.extract_words(
                     keep_blank_chars=True,
@@ -79,7 +79,7 @@ class MCQQuestionSplitter:
                 
                 if current_line:
                     lines.append(current_line)
-                
+                                
                 # Process each line
                 for line in lines:
                     # Combine words into line text
@@ -87,7 +87,7 @@ class MCQQuestionSplitter:
                     
                     # Check for question patterns
                     num_match = re.match(r'^\s*(\d+)[.\s]', line_text)
-                    
+
                     # If first question, set reference formatting
                     if not reference_formatting and num_match:
                         reference_formatting = {
@@ -105,9 +105,7 @@ class MCQQuestionSplitter:
                     
                     question_starters = r'(Which|What|How|Why|Where|When|Whose|Who|In|The|If|Define|State|Calculate)'
                     starter_match = re.match(f"^{question_starters}", line_text, re.IGNORECASE)
-                    
-                    option_match = re.match(r'^[A-D][\.\)]', line_text)
-                    
+                                        
                     is_question = False
                     if num_match:
                         question_num = int(num_match.group(1))
@@ -130,55 +128,86 @@ class MCQQuestionSplitter:
                             'end_bbox': bbox.copy(),
                             'content': [(page_num, bbox, line_text)]
                         }
+                        options_cnt = 0
                         expected_question += 1
                         print(f"Found question {expected_question-1}: {line_text}")
                     
-                    elif current_question and not option_match and line_text != " ":
-                        # print(line_text)
+                    elif current_question and line_text != " " and options_cnt < 4:
+                        # Capture all content between questions
                         bbox = [line[0]['x0'], line[0]['top'], 
                             line[-1]['x1'], line[-1]['bottom']]
+                        # print(line_text, bbox, options_cnt)
                         current_question['content'].append((page_num, bbox, line_text))
                         current_question['end_bbox'][2] = max(current_question['end_bbox'][2], bbox[2])
                         current_question['end_bbox'][3] = max(current_question['end_bbox'][3], bbox[3])
-                    
-                    elif option_match:
-                        bbox = [line[0]['x0'], line[0]['top'], 
-                            line[-1]['x1'], line[-1]['bottom']]
-                        if current_question:
-                            current_question['content'].append((page_num, bbox, line_text))
-                            current_question['end_bbox'][2] = max(current_question['end_bbox'][2], bbox[2])
-                            current_question['end_bbox'][3] = max(current_question['end_bbox'][3], bbox[3])
-                            
-            
+
+                    if re.match(r'[A-D]\s+[^)]+\s+[A-D]\s+[^)]+\s+[A-D]\s+[^)]+\s+[A-D]\s+[^)]+', line_text) or line_text == 'A B C D':
+                        options_cnt += 4
+                    elif re.match(r'^[A-D]\s+[A-D]', line_text):
+                        options_cnt += 2
+                    elif re.search(r'[A-D]\s+.+', line_text) or line_text in 'ABCD':
+                        options_cnt += 1
+                        
             # Add the last question
             if current_question:
                 questions.append(current_question)
-        
+                
+
         return questions
-    
-    def capture_question_image(self, pdf_path, question):
-        """Capture entire question including images as a single image."""
+
+    def capture_question_image(self, pdf_path, question, questions):
+        """Capture entire question including images up until the next question starts."""
         with pdfplumber.open(pdf_path) as pdf:
             page = pdf.pages[question['page']]
             
-            # Calculate complete boundary
+            # Calculate initial boundary from current question
             bbox = question['start_bbox'].copy()
             
+            # Find the next question that appears after this one
+            next_question = None
+            for q in questions:
+                if q['number'] == question['number'] + 1:
+                    next_question = q
+                    break
+            
+            # Update bbox based on content and next question position
             for content in question['content']:
-                page_num, content_bbox, content_text = content
+                page_num, content_bbox, _ = content
                 
-                # Check if content is on the same page and not a next question
-                if (page_num == question['page'] and 
-                    not re.match(r'^\s*(\d+)[.\s]', content_text)):
+                # If content is on a different page than the next question
+                # or if content appears before the next question on the same page
+                should_include = True
+                if next_question and page_num == next_question['page']:
+                    if content_bbox[1] >= next_question['start_bbox'][1]:
+                        should_include = False
+                
+                if should_include:
                     bbox[0] = min(bbox[0], content_bbox[0])
                     bbox[1] = min(bbox[1], content_bbox[1])
                     bbox[2] = max(bbox[2], content_bbox[2])
                     bbox[3] = max(bbox[3], content_bbox[3])
-                    
-            # bbox[2] = page.bbox[2]
+                    # print(bbox)
+            
+            # If there's a next question on the same page, use its start position
+            # as the end boundary
+            if next_question and next_question['page'] == question['page']:
+                bbox[3] = next_question['start_bbox'][1] - 5  # Small gap
+                # print(next_question['start_bbox'][1], bbox[3])
+            elif question['page']+1 == len(pdf.pages):
+                bbox[3] = bbox[3] + 30
+            else:
+                # If this is the last question on the page, extend to bottom
+                # or if question continues to next page, extend to page bottom
+                bbox[3] = max(page.bbox[3] - 50, bbox[3])
+            
+            # Ensure reasonable width
             bbox[2] = min(bbox[2] * 1.20, page.bbox[2])
-            bbox[3] = min(bbox[3] + 15, page.bbox[3])
-
+            
+            # Handle multi-page questions
+            # if next_question and next_question['page'] > question['page']:
+            #     # Capture full remaining page height for current page
+            #     bbox[3] = page.bbox[3]
+            
             # Render page to image
             img = page.crop(bbox).to_image(resolution=200)
             
@@ -274,7 +303,7 @@ class MCQQuestionSplitter:
             # Process each question
             for question in tqdm(questions, desc='Processing questions', unit='q'):
                 try:
-                    img_path = self.capture_question_image(pdf_path, question)
+                    img_path = self.capture_question_image(pdf_path, question, questions)
                     slide = self.create_slide_with_question(prs, img_path, question['number'])
                     self.set_slide_timing(slide, self.slide_duration)
                 except Exception as e:

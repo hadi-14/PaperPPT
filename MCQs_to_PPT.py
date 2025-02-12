@@ -325,7 +325,9 @@ class MCQSplitterGUI:
                 
                 self.log_text.insert(tk.END, "\nBatch processing completed\n")
                 self.process_button.configure(state="normal")
-            
+                
+                messagebox.showinfo("File processing completed successfully!")
+
             threading.Thread(target=process_batch, daemon=True).start()
         
         else:
